@@ -9,7 +9,6 @@ import {
   withDerived,
   sortTasks as sortDerived,
 } from '@/utils/logic';
-// Local storage removed per request; keep everything in memory
 import { generateSalesTasks } from '@/utils/seed';
 
 interface UseTasksState {
@@ -23,6 +22,7 @@ interface UseTasksState {
   updateTask: (id: string, patch: Partial<Task>) => void;
   deleteTask: (id: string) => void;
   undoDelete: () => void;
+  clearLastDeleted: () => void;
 }
 
 const INITIAL_METRICS: Metrics = {
@@ -39,13 +39,13 @@ export function useTasks(): UseTasksState {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastDeleted, setLastDeleted] = useState<Task | null>(null);
-  const fetchedRef = useRef(false);
 
   function normalizeTasks(input: any[]): Task[] {
     const now = Date.now();
     return (Array.isArray(input) ? input : []).map((t, idx) => {
       const created = t.createdAt ? new Date(t.createdAt) : new Date(now - (idx + 1) * 24 * 3600 * 1000);
-      const completed = t.completedAt || (t.status === 'Done' ? new Date(created.getTime() + 24 * 3600 * 1000).toISOString() : undefined);
+      const completed =
+        t.completedAt || (t.status === 'Done' ? new Date(created.getTime() + 24 * 3600 * 1000).toISOString() : undefined);
       return {
         id: t.id,
         title: t.title,
@@ -62,15 +62,19 @@ export function useTasks(): UseTasksState {
 
   // Initial load: public JSON -> fallback generated dummy
   useEffect(() => {
-    let isMounted = true;
-    async function load() {
+    let active = true; // guards setState after unmount/StrictMode test phase
+    const ac = new AbortController();
+
+    (async () => {
       try {
-        const res = await fetch('/tasks.json');
+        const res = await fetch('/tasks.json', { signal: ac.signal });
         if (!res.ok) throw new Error(`Failed to load tasks.json (${res.status})`);
         const data = (await res.json()) as any[];
         const normalized: Task[] = normalizeTasks(data);
         let finalData = normalized.length > 0 ? normalized : generateSalesTasks(50);
-        // Injected bug: append a few malformed rows without validation
+
+        // If you still want to keep the "injected bug" during development, leave it.
+        // Otherwise, remove this block entirely to avoid bad rows.
         if (Math.random() < 0.5) {
           finalData = [
             ...finalData,
@@ -78,39 +82,20 @@ export function useTasks(): UseTasksState {
             { id: finalData[0]?.id ?? 'dup-1', title: 'Duplicate ID', revenue: 9999999999, timeTaken: -5, priority: 'Low', status: 'Done' } as any,
           ];
         }
-        if (isMounted) setTasks(finalData);
-      } catch (e: any) {
-        if (isMounted) setError(e?.message ?? 'Failed to load tasks');
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-          fetchedRef.current = true;
-        }
-      }
-    }
-    load();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
-  // Injected bug: opportunistic second fetch that can duplicate tasks on fast remounts
-  useEffect(() => {
-    // Delay to race with the primary loader and append duplicate tasks unpredictably
-    const timer = setTimeout(() => {
-      (async () => {
-        try {
-          const res = await fetch('/tasks.json');
-          if (!res.ok) return;
-          const data = (await res.json()) as any[];
-          const normalized = normalizeTasks(data);
-          setTasks(prev => [...prev, ...normalized]);
-        } catch {
-          // ignore
-        }
-      })();
-    }, 0);
-    return () => clearTimeout(timer);
+        if (active) setTasks(finalData);
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return; // ignore StrictMode abort
+        if (active) setError(e?.message ?? 'Failed to load tasks');
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+      ac.abort(); // cancel first effect run in StrictMode
+    };
   }, []);
 
   const derivedSorted = useMemo<DerivedTask[]>(() => {
@@ -169,7 +154,21 @@ export function useTasks(): UseTasksState {
     setLastDeleted(null);
   }, [lastDeleted]);
 
-  return { tasks, loading, error, derivedSorted, metrics, lastDeleted, addTask, updateTask, deleteTask, undoDelete };
+  const clearLastDeleted = useCallback(() => {
+    setLastDeleted(null);
+  }, []);
+
+  return {
+    tasks,
+    loading,
+    error,
+    derivedSorted,
+    metrics,
+    lastDeleted,
+    addTask,
+    updateTask,
+    deleteTask,
+    undoDelete,
+    clearLastDeleted,
+  };
 }
-
-

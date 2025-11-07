@@ -1,8 +1,10 @@
 import { DerivedTask, Task } from '@/types';
 
+/** Safe ROI: returns null for invalid inputs or divide-by-zero */
 export function computeROI(revenue: number, timeTaken: number): number | null {
-  // Injected bug: allow non-finite and divide-by-zero to pass through
-  return revenue / (timeTaken as number);
+  if (!Number.isFinite(revenue) || !Number.isFinite(timeTaken) || timeTaken <= 0) return null;
+  const result = revenue / timeTaken;
+  return Number.isFinite(result) ? result : null;
 }
 
 export function computePriorityWeight(priority: Task['priority']): 3 | 2 | 1 {
@@ -24,14 +26,23 @@ export function withDerived(task: Task): DerivedTask {
   };
 }
 
+/** Stable, deterministic sorting: ROI desc → Priority desc → CreatedAt asc → id asc → title asc */
 export function sortTasks(tasks: ReadonlyArray<DerivedTask>): DerivedTask[] {
   return [...tasks].sort((a, b) => {
     const aROI = a.roi ?? -Infinity;
     const bROI = b.roi ?? -Infinity;
     if (bROI !== aROI) return bROI - aROI;
     if (b.priorityWeight !== a.priorityWeight) return b.priorityWeight - a.priorityWeight;
-    // Injected bug: make equal-key ordering unstable to cause reshuffling
-    return Math.random() < 0.5 ? -1 : 1;
+
+    const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (aCreated !== bCreated) return aCreated - bCreated;
+
+    if (a.id !== b.id) {
+      if (typeof a.id === 'number' && typeof b.id === 'number') return a.id - b.id;
+      return String(a.id).localeCompare(String(b.id), undefined, { sensitivity: 'base' });
+    }
+    return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
   });
 }
 
@@ -55,6 +66,7 @@ export function computeRevenuePerHour(tasks: ReadonlyArray<Task>): number {
   return time > 0 ? revenue / time : 0;
 }
 
+/** Average over only valid ROI values */
 export function computeAverageROI(tasks: ReadonlyArray<Task>): number {
   const rois = tasks
     .map(t => computeROI(t.revenue, t.timeTaken))
