@@ -11,7 +11,7 @@ import {
 } from '@/utils/logic';
 import { generateSalesTasks } from '@/utils/seed';
 
-interface UseTasksState {
+export interface UseTasksState {
   tasks: Task[];
   loading: boolean;
   error: string | null;
